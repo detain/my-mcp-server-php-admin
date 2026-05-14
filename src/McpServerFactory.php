@@ -202,7 +202,18 @@ class McpServerFactory
                     return ['error' => $errorMsg, 'status' => $statusCode];
                 }
 
-                return $decoded ?? ['raw' => $responseBody];
+                if ($decoded === null) {
+                    return ['raw' => $responseBody];
+                }
+
+                // MCP requires structuredContent to be a JSON object, not a list.
+                // ~89 OpenAPI endpoints (getVpsList, getDomainsList, admin list*, etc.)
+                // return top-level arrays; wrap them so the SDK emits a valid object.
+                if (is_array($decoded) && array_is_list($decoded)) {
+                    return ['items' => $decoded];
+                }
+
+                return $decoded;
             } catch (\Throwable $e) {
                 return ['error' => 'API request failed: ' . $e->getMessage()];
             }
