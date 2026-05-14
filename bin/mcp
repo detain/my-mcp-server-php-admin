@@ -1,0 +1,129 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Admin MCP Proxy - STDIO Transport Entry Point
+ *
+ * This CLI runs the MCP server using stdio transport, suitable for
+ * local AI tool integration (Claude Desktop, Cursor, etc.)
+ *
+ * Usage:
+ *   bin/mcp
+ *
+ * Environment Variables (stdio auth):
+ *   API_KEY        - API key for authentication
+ *   SESSION_ID     - Session ID for authentication
+ *   BEARER_TOKEN   - Bearer token for authentication
+ *
+ * Configuration (from .env or environment):
+ *   OPENAPI_SPEC_URL  - URL to fetch OpenAPI spec from
+ *   API_BASE_URL      - Base URL of the API to proxy to
+ *   SESSION_DIR       - Directory for session storage
+ *   CACHE_DIR         - Directory for cached tool definitions
+ *   SERVER_NAME       - MCP server name
+ *   SERVER_VERSION    - MCP server version
+ */
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use AdminMcp\FileSessionStore;
+use AdminMcp\McpServerFactory;
+use AdminMcp\OpenApiParser;
+use GuzzleHttp\Client as GuzzleClient;
+use Mcp\Server\Transport\StdioTransport;
+
+// Load environment variables from .env if present
+$envFile = __DIR__ . '/../.env';
+if (file_exists($envFile)) {
+    $lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (str_starts_with(trim($line), '#')) {
+            continue;
+        }
+        if (str_contains($line, '=')) {
+            [$key, $value] = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value);
+            if ($key && !isset($_ENV[$key])) {
+                $_ENV[$key] = $value;
+                putenv("$key=$value");
+            }
+        }
+    }
+}
+
+// Configuration from environment
+$openApiSpecUrl = $_ENV['OPENAPI_SPEC_URL'] ?? 'https://my.interserver.net/admin/spec/openapi-admin.yaml';
+$apiBaseUrl = $_ENV['API_BASE_URL'] ?? 'https://my.interserver.net/apiv2/admin';
+$sessionDir = $_ENV['SESSION_DIR'] ?? '/tmp/mcp_admin_sessions';
+$cacheDir = $_ENV['CACHE_DIR'] ?? '/tmp/mcp_admin_cache';
+$serverName = $_ENV['SERVER_NAME'] ?? 'myadmin-admin-mcp';
+$serverVersion = $_ENV['SERVER_VERSION'] ?? '1.0.0';
+
+// Create required directories
+if (!is_dir($sessionDir)) {
+    mkdir($sessionDir, 0775, true);
+}
+if (!is_dir($cacheDir)) {
+    mkdir($cacheDir, 0775, true);
+}
+
+// Initialize components
+$httpClient = new GuzzleClient([
+    'timeout' => 30,
+    'connect_timeout' => 10,
+]);
+$parser = new OpenApiParser($cacheDir, $httpClient);
+
+// Parse OpenAPI spec and build MCP server
+try {
+    $toolDefs = $parser->parse($openApiSpecUrl);
+} catch (\Throwable $e) {
+    fwrite(STDERR, "ERROR: Failed to parse OpenAPI spec: " . $e->getMessage() . "\n");
+    exit(1);
+}
+
+// Build the MCP server with stdio auth
+try {
+    $factory = new McpServerFactory($apiBaseUrl);
+
+    // Set stdio auth from environment variables
+    $stdioAuth = [];
+    if (!empty($_ENV['API_KEY'])) {
+        $stdioAuth['api_key'] = $_ENV['API_KEY'];
+    }
+    if (!empty($_ENV['SESSION_ID'])) {
+        $stdioAuth['session_id'] = $_ENV['SESSION_ID'];
+    }
+    if (!empty($_ENV['BEARER_TOKEN'])) {
+        $stdioAuth['bearer_token'] = $_ENV['BEARER_TOKEN'];
+    }
+    if (!empty($stdioAuth)) {
+        $factory->setStdioAuth($stdioAuth);
+    }
+
+    $sessionStore = new FileSessionStore($sessionDir);
+    $mcpServer = $factory->build($serverName, $serverVersion, $toolDefs, $sessionStore);
+} catch (\Throwable $e) {
+    fwrite(STDERR, "ERROR: Failed to build MCP server: " . $e->getMessage() . "\n");
+    exit(1);
+}
+
+// Create stdio transport (errors logged to STDERR per MCP spec)
+// Pass null logger - StdioTransport handles this gracefully
+$transport = new StdioTransport(\STDIN, \STDOUT);
+
+// Handle EOF gracefully
+if (feof(\STDIN)) {
+    exit(0);
+}
+
+// Run the server
+try {
+    $mcpServer->run($transport);
+} catch (\Throwable $e) {
+    fwrite(STDERR, "ERROR: MCP server error: " . $e->getMessage() . "\n");
+    exit(1);
+}

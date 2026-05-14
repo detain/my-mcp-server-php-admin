@@ -1,0 +1,39 @@
+{
+    "name": "myadmin/admin-mcp-proxy",
+    "description": "Standalone MCP proxy server for MyAdmin admin API",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.2",
+        "mcp/sdk": "^0.5",
+        "guzzlehttp/guzzle": "^7.8",
+        "symfony/yaml": "^6.4|^7.0",
+        "symfony/http-foundation": "^6.4|^7.0",
+        "nyholm/psr7": "^1.8"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "AdminMcp\\": "src/"
+        }
+    },
+    "bin": ["bin/mcp"],
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist",
+        "sort-packages": true
+    },
+    "scripts": {
+        "post-install-cmd": [
+            "@ensure-dirs"
+        ],
+        "post-update-cmd": [
+            "@ensure-dirs"
+        ],
+        "ensure-dirs": [
+            "mkdir -p var/cache var/sessions"
+        ]
+    }
+}
