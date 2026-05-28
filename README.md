@@ -1,5 +1,12 @@
 # Admin MCP Proxy Server
 
+[![CI](https://github.com/detain/my-mcp-server-php-admin/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/detain/my-mcp-server-php-admin/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/detain/my-mcp-server-php-admin/branch/master/graph/badge.svg?token=40d496dd-3c53-41e3-8dc6-49fd3d3db9e7)](https://codecov.io/gh/detain/my-mcp-server-php-admin)
+[![PHP Version](https://img.shields.io/badge/php-%E2%89%A58.2-8892BF.svg?logo=php)](https://php.net/)
+[![Tests](https://img.shields.io/badge/tests-90%20passing-success.svg?logo=phpunit)](#running-tests)
+[![PHPStan](https://img.shields.io/badge/PHPStan-level%206-1ABC9C.svg)](https://phpstan.org)
+[![License](https://img.shields.io/badge/license-proprietary-red.svg)](#license)
+
 A standalone MCP (Model Context Protocol) proxy server for the MyAdmin admin API.
 This server fetches its tool definitions from a remote OpenAPI spec and handles MCP
 protocol communication via either STDIO (for local clients like Claude Desktop / Cursor)
@@ -286,6 +293,34 @@ $parser->clearCache('https://my.interserver.net/admin/spec/openapi-admin.yaml');
 
 - Ensure `SESSION_DIR` is writable.
 - Sessions expire after 1 hour by default.
+
+## Running Tests
+
+Run the full CI pipeline locally:
+
+```bash
+composer install
+composer ci          # lint + phpstan + tests
+```
+
+Or individual steps:
+
+```bash
+composer test                   # PHPUnit
+composer test-coverage          # HTML coverage report at coverage/index.html
+composer test-coverage-clover   # coverage.xml (for Codecov / Codacy / etc.)
+composer phpstan                # PHPStan at level 6
+composer lint                   # php -l on src/, tests/, bin/mcp, public/index.php
+```
+
+The test suite (in `tests/`) covers `OpenApiParser` and `McpServerFactory` at
+100% line / method / class coverage, plus process-based smoke tests for
+`bin/mcp` (`--help`, `--http`, conflict detection). PHPUnit coverage is
+scoped to `src/` via `phpunit.xml.dist`; entry-point scripts are exercised
+by `tests/Integration/`.
+
+GitHub Actions runs the same `composer ci` pipeline on every push and PR
+across PHP 8.2 / 8.3 / 8.4, and uploads Clover coverage to Codecov.
 
 ## License
 
