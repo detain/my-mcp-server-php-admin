@@ -5,7 +5,7 @@
     "license": "proprietary",
     "require": {
         "php": ">=8.2",
-        "mcp/sdk": "^0.5",
+        "mcp/sdk": "dev-main",
         "guzzlehttp/guzzle": "^7.8",
         "symfony/yaml": "^6.4|^7.0",
         "symfony/http-foundation": "^6.4|^7.0",
