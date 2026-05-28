@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/detain/my-mcp-server-php-admin/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/detain/my-mcp-server-php-admin/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/detain/my-mcp-server-php-admin/branch/master/graph/badge.svg?token=40d496dd-3c53-41e3-8dc6-49fd3d3db9e7)](https://codecov.io/gh/detain/my-mcp-server-php-admin)
+[![Codacy Grade](https://app.codacy.com/project/badge/Grade/733cbe8c5c22406f9ddc8377f61b1e1e)](https://app.codacy.com/gh/detain/my-mcp-server-php-admin/dashboard)
+[![Codacy Coverage](https://app.codacy.com/project/badge/Coverage/733cbe8c5c22406f9ddc8377f61b1e1e)](https://app.codacy.com/gh/detain/my-mcp-server-php-admin/coverage)
 [![PHP Version](https://img.shields.io/badge/php-%E2%89%A58.2-8892BF.svg?logo=php)](https://php.net/)
 [![Tests](https://img.shields.io/badge/tests-90%20passing-success.svg?logo=phpunit)](#running-tests)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%206-1ABC9C.svg)](https://phpstan.org)
