@@ -8,7 +8,8 @@
         "mcp/sdk": "dev-main",
         "guzzlehttp/guzzle": "^7.8",
         "symfony/yaml": "^6.4|^7.0",
-        "symfony/http-foundation": "^6.4|^7.0",
+        "symfony/uid": "^6.4|^7.0",
+        "php-http/message": "^1.16",
         "nyholm/psr7": "^1.8"
     },
     "require-dev": {

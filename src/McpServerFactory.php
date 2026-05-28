@@ -22,6 +22,9 @@ class McpServerFactory
     /** @var array<string, string>|null Stdio auth credentials (api_key, session_id, bearer_token) */
     private ?array $stdioAuth = null;
 
+    /** @var bool|string Guzzle verify option: true (system CA), false (no verify), or path to CA bundle. */
+    private bool|string $sslVerify = true;
+
     public function __construct(string $apiBaseUrl)
     {
         $this->apiBaseUrl = rtrim($apiBaseUrl, '/');
@@ -36,6 +39,18 @@ class McpServerFactory
     public function setStdioAuth(array $auth): void
     {
         $this->stdioAuth = $auth;
+    }
+
+    /**
+     * Set the SSL verification setting for outbound API calls.
+     * Maps directly to Guzzle's `verify` option, which controls
+     * CURLOPT_SSL_VERIFYPEER / CURLOPT_SSL_VERIFYHOST / CURLOPT_CAINFO.
+     *
+     * @param bool|string $verify true (system CA), false (no verify), or path to a CA bundle file.
+     */
+    public function setSslVerify(bool|string $verify): void
+    {
+        $this->sslVerify = $verify;
     }
 
     /**
@@ -92,11 +107,15 @@ class McpServerFactory
         $queryParams = $toolDef['queryParams'];
         $hasBody = $toolDef['hasBody'];
         $baseUrl = $this->apiBaseUrl;
+        $sslVerify = $this->sslVerify;
 
-        return function (RequestContext $ctx) use ($httpMethod, $pathTemplate, $pathParams, $queryParams, $hasBody, $baseUrl) {
+        return function (RequestContext $ctx) use ($httpMethod, $pathTemplate, $pathParams, $queryParams, $hasBody, $baseUrl, $sslVerify) {
             /** @var \Mcp\Schema\Request\CallToolRequest $request */
             $request = $ctx->getRequest();
             $arguments = $request->arguments ?? [];
+
+            // Extract auth headers from the MCP request context
+            $authHeaders = $this->extractAuthHeaders($ctx);
 
             // Build the URL path, substituting path parameters
             $path = $pathTemplate;
@@ -121,49 +140,9 @@ class McpServerFactory
                 $body = array_diff_key($arguments, array_flip($reserved));
             }
 
-            // Set up auth headers - extract from incoming request
-            // Headers we support: Authorization (Bearer), X-API-KEY, sessionid
+            // Set up headers
             $headers = ['Accept' => 'application/json'];
-
-            // Get the PSR request from context if available
-            $incomingRequest = $this->getIncomingRequest($ctx);
-            $hasAuth = false;
-            if ($incomingRequest !== null) {
-                // Check for Bearer token
-                $authHeader = $incomingRequest->getHeaderLine('Authorization');
-                if (str_starts_with($authHeader, 'Bearer ')) {
-                    $headers['Authorization'] = $authHeader;
-                    $hasAuth = true;
-                }
-
-                // Check for X-API-KEY
-                $apiKey = $incomingRequest->getHeaderLine('X-API-KEY');
-                if ($apiKey) {
-                    $headers['X-API-KEY'] = $apiKey;
-                    $hasAuth = true;
-                }
-
-                // Check for sessionid
-                $sessionId = $incomingRequest->getHeaderLine('sessionid');
-                if ($sessionId) {
-                    $headers['sessionid'] = $sessionId;
-                    $hasAuth = true;
-                }
-            }
-
-            // Fall back to stdio auth from environment if no headers found
-            if (!$hasAuth && $this->stdioAuth !== null) {
-                if (!empty($this->stdioAuth['bearer_token'])) {
-                    $headers['Authorization'] = 'Bearer ' . $this->stdioAuth['bearer_token'];
-                }
-                if (!empty($this->stdioAuth['api_key'])) {
-                    $headers['X-API-KEY'] = $this->stdioAuth['api_key'];
-                }
-                if (!empty($this->stdioAuth['session_id'])) {
-                    $headers['sessionid'] = $this->stdioAuth['session_id'];
-                }
-            }
-
+            $headers = array_merge($headers, $authHeaders);
             // X-API-APP=1 short-circuits api_check_auth_limits() for MCP callers
             $headers['X-API-APP'] = '1';
             // Forward an MCP request id for tracing
@@ -173,6 +152,7 @@ class McpServerFactory
                 'timeout' => 60,
                 'connect_timeout' => 10,
                 'http_errors' => false,
+                'verify' => $sslVerify,
             ]);
 
             $options = ['headers' => $headers];
@@ -221,18 +201,53 @@ class McpServerFactory
     }
 
     /**
-     * Extract incoming PSR request from the MCP request context.
+     * Extract authentication headers from the MCP request context.
+     * Supports X-API-KEY, sessionid, and Bearer token from incoming request headers.
+     * For stdio mode, falls back to credentials set via setStdioAuth().
+     *
+     * @return array<string, string>
      */
-    private function getIncomingRequest(RequestContext $ctx): ?\Psr\Http\Message\ServerRequestInterface
+    private function extractAuthHeaders(RequestContext $ctx): array
     {
-        // The RequestContext may have the request stored
-        // Try to access it via reflection or a getter method
-        try {
-            $reflection = new \ReflectionClass($ctx);
-            $method = $reflection->getMethod('getRequest');
-            return $method->invoke($ctx);
-        } catch (\Throwable) {
-            return null;
+        $headers = [];
+
+        // Get the underlying HTTP request to access headers
+        $request = $ctx->getRequest();
+
+        // Access headers via the PSR-7 request interface
+        if (method_exists($request, 'getHeaderLine')) {
+            // Try Authorization header for Bearer token
+            $auth = $request->getHeaderLine('Authorization');
+            if ($auth && str_starts_with($auth, 'Bearer ')) {
+                $headers['Authorization'] = $auth;
+            }
+
+            // Try X-API-KEY header
+            $apiKey = $request->getHeaderLine('X-API-KEY');
+            if ($apiKey) {
+                $headers['X-API-KEY'] = $apiKey;
+            }
+
+            // Try sessionid header
+            $sessionId = $request->getHeaderLine('sessionid');
+            if ($sessionId) {
+                $headers['sessionid'] = $sessionId;
+            }
         }
+
+        // Fall back to stdio auth from environment if no headers found
+        if (empty($headers) && $this->stdioAuth !== null) {
+            if (!empty($this->stdioAuth['bearer_token'])) {
+                $headers['Authorization'] = 'Bearer ' . $this->stdioAuth['bearer_token'];
+            }
+            if (!empty($this->stdioAuth['api_key'])) {
+                $headers['X-API-KEY'] = $this->stdioAuth['api_key'];
+            }
+            if (!empty($this->stdioAuth['session_id'])) {
+                $headers['sessionid'] = $this->stdioAuth['session_id'];
+            }
+        }
+
+        return $headers;
     }
 }

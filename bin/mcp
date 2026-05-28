@@ -24,15 +24,161 @@ declare(strict_types=1);
  *   CACHE_DIR         - Directory for cached tool definitions
  *   SERVER_NAME       - MCP server name
  *   SERVER_VERSION    - MCP server version
+ *
+ * TLS / SSL:
+ *   CA_CERT_FILE      - Path to a CA bundle (PEM). Applied via ini_set to
+ *                       curl.cainfo + openssl.cafile, and passed to Guzzle
+ *                       so it sets CURLOPT_CAINFO on outbound requests.
+ *                       Leave empty to use the system default trust store.
+ *   SSL_VERIFY        - Verify TLS peer + host (true/false, default: true).
+ *                       Maps to CURLOPT_SSL_VERIFYPEER + CURLOPT_SSL_VERIFYHOST.
  */
 
-require __DIR__ . '/../vendor/autoload.php';
-
-use AdminMcp\FileSessionStore;
 use AdminMcp\McpServerFactory;
 use AdminMcp\OpenApiParser;
 use GuzzleHttp\Client as GuzzleClient;
 use Mcp\Server\Transport\StdioTransport;
+
+// ---------------------------------------------------------------------
+// CLI argument parsing (precedence: CLI > env > default)
+// ---------------------------------------------------------------------
+$cliOpts = [
+    'help'         => false,
+    'verbose'      => 0,
+    'mode'         => null,   // 'stdio' (default) or 'http'
+    'host'         => null,   // HTTP-mode bind host
+    'port'         => null,   // HTTP-mode bind port
+    'openapi_spec' => null,
+    'base_url'     => null,
+    'api_key'      => null,
+    'verify'       => null,
+    'ca_cert'      => null,
+];
+
+foreach (array_slice($argv ?? [], 1) as $arg) {
+    if ($arg === '-h' || $arg === '--help') {
+        $cliOpts['help'] = true;
+    } elseif (preg_match('/^-(v+)$/', $arg, $m)) {
+        $cliOpts['verbose'] = max($cliOpts['verbose'], strlen($m[1]));
+    } elseif (str_starts_with($arg, '--openapi-spec=')) {
+        $cliOpts['openapi_spec'] = substr($arg, 15);
+    } elseif (str_starts_with($arg, '--base-url=')) {
+        $cliOpts['base_url'] = substr($arg, 11);
+    } elseif (str_starts_with($arg, '--api-key=')) {
+        $cliOpts['api_key'] = substr($arg, 10);
+    } elseif (str_starts_with($arg, '--verify=')) {
+        $cliOpts['verify'] = substr($arg, 9);
+    } elseif (str_starts_with($arg, '--ca-cert=')) {
+        $cliOpts['ca_cert'] = substr($arg, 10);
+    } elseif ($arg === '--stdio' || $arg === '--http') {
+        $mode = substr($arg, 2);
+        if ($cliOpts['mode'] !== null && $cliOpts['mode'] !== $mode) {
+            fwrite(STDERR, "ERROR: cannot combine --stdio and --http\n");
+            exit(2);
+        }
+        $cliOpts['mode'] = $mode;
+    } elseif (str_starts_with($arg, '--host=')) {
+        $cliOpts['host'] = substr($arg, 7);
+    } elseif (str_starts_with($arg, '--port=')) {
+        $cliOpts['port'] = substr($arg, 7);
+    } else {
+        fwrite(STDERR, "ERROR: Unknown option: {$arg}\n");
+        fwrite(STDERR, "Try 'bin/mcp --help' for usage.\n");
+        exit(2);
+    }
+}
+
+if ($cliOpts['help']) {
+    echo <<<HELP
+Admin MCP Proxy - STDIO Transport
+
+Usage:
+  bin/mcp [options]
+
+Options:
+  -h, --help              Show this help and exit
+  -v, -vv, -vvv           Verbose output to STDERR (1=info, 2=debug, 3=trace)
+  --stdio                 Run the MCP STDIO transport (default)
+  --http                  Spawn `php -S` against public/ and exit (background)
+  --host=HOST             HTTP bind host                (default: 127.0.0.1)
+  --port=PORT             HTTP bind port                (default: 8080)
+  --openapi-spec=URL      OpenAPI spec URL          (env: OPENAPI_SPEC_URL)
+  --base-url=URL          Upstream API base URL     (env: API_BASE_URL)
+  --api-key=KEY           API key for upstream auth (env: API_KEY)
+  --verify=true|false     Verify TLS peer + host    (env: SSL_VERIFY)
+  --ca-cert=PATH          Path to CA bundle PEM     (env: CA_CERT_FILE)
+
+Environment variables (see .env.example):
+  OPENAPI_SPEC_URL, API_BASE_URL, SESSION_DIR, CACHE_DIR,
+  SERVER_NAME, SERVER_VERSION, API_KEY, SESSION_ID, BEARER_TOKEN,
+  CA_CERT_FILE, SSL_VERIFY
+
+CLI options override environment variables.
+
+HELP;
+    exit(0);
+}
+
+// Verbose logger (writes to STDERR; level 1=info, 2=debug, 3=trace)
+$verboseLevel = $cliOpts['verbose'];
+$log = function (int $level, string $message) use ($verboseLevel): void {
+    if ($level <= $verboseLevel) {
+        $tag = ['', 'INFO', 'DEBUG', 'TRACE'][min($level, 3)];
+        fwrite(STDERR, '[' . date('Y-m-d\TH:i:s') . "] [{$tag}] {$message}\n");
+    }
+};
+
+// ---------------------------------------------------------------------
+// HTTP mode: spawn `php -S` against public/ and exit
+// (handled before autoload so --http works without `composer install`)
+// ---------------------------------------------------------------------
+if ($cliOpts['mode'] === 'http') {
+    $host = $cliOpts['host'] ?? '127.0.0.1';
+    $port = (int) ($cliOpts['port'] ?? 8080);
+    $docroot = realpath(__DIR__ . '/../public');
+    $projectRoot = realpath(__DIR__ . '/..');
+
+    if ($docroot === false || !is_dir($docroot)) {
+        fwrite(STDERR, "ERROR: public/ directory not found at " . __DIR__ . "/../public\n");
+        exit(1);
+    }
+
+    $outLog = $projectRoot . '/mcp-server-out.log';
+    $errLog = $projectRoot . '/mcp-server-err.log';
+
+    $cmd = [PHP_BINARY, '-S', $host . ':' . $port, '-t', $docroot];
+    $descriptorspec = [
+        0 => ['pipe', 'r'],
+        1 => ['file', $outLog, 'a'],
+        2 => ['file', $errLog, 'a'],
+    ];
+
+    $log(2, 'Launching: ' . implode(' ', $cmd));
+    $process = proc_open($cmd, $descriptorspec, $pipes);
+
+    if (!is_resource($process)) {
+        fwrite(STDERR, "ERROR: Failed to spawn PHP built-in server\n");
+        exit(1);
+    }
+
+    // Give the server a moment to bind, then confirm it's still alive
+    usleep(200_000);
+    $status = proc_get_status($process);
+    if (!$status['running']) {
+        fwrite(STDERR, "ERROR: HTTP server exited immediately. Check {$errLog}\n");
+        exit(1);
+    }
+
+    echo "Server started at http://{$host}:{$port} (pid {$status['pid']})\n";
+    echo "Logs: {$outLog}\n";
+    echo "      {$errLog}\n";
+    exit(0);
+}
+
+// Composer autoload (after CLI parsing so --help/--http work without `composer install`)
+require __DIR__ . '/../vendor/autoload.php';
+
+$log(1, 'Admin MCP Proxy starting (STDIO transport)');
 
 // Load environment variables from .env if present
 $envFile = __DIR__ . '/../.env';
@@ -54,13 +200,40 @@ if (file_exists($envFile)) {
     }
 }
 
-// Configuration from environment
-$openApiSpecUrl = $_ENV['OPENAPI_SPEC_URL'] ?? 'https://my.interserver.net/admin/spec/openapi-admin.yaml';
-$apiBaseUrl = $_ENV['API_BASE_URL'] ?? 'https://my.interserver.net/apiv2/admin';
-$sessionDir = $_ENV['SESSION_DIR'] ?? '/tmp/mcp_admin_sessions';
-$cacheDir = $_ENV['CACHE_DIR'] ?? '/tmp/mcp_admin_cache';
-$serverName = $_ENV['SERVER_NAME'] ?? 'myadmin-admin-mcp';
-$serverVersion = $_ENV['SERVER_VERSION'] ?? '1.0.0';
+// Configuration: CLI > env > default (with admin-specific defaults)
+$openapiSpecUrl = $cliOpts['openapi_spec'] ?? $_ENV['OPENAPI_SPEC_URL'] ?? 'https://my.interserver.net/admin/spec/openapi-admin.yaml';
+$apiBaseUrl     = $cliOpts['base_url']     ?? $_ENV['API_BASE_URL']     ?? 'https://my.interserver.net/apiv2/admin';
+$sessionDir     = $_ENV['SESSION_DIR']    ?? '/tmp/mcp_admin_sessions';
+$cacheDir       = $_ENV['CACHE_DIR']      ?? '/tmp/mcp_admin_cache';
+$serverName     = $_ENV['SERVER_NAME']    ?? 'myadmin-admin-mcp';
+$serverVersion  = $_ENV['SERVER_VERSION'] ?? '1.0.0';
+
+// SSL / TLS configuration: CLI > env > default
+$caCertFile = $cliOpts['ca_cert'] ?? $_ENV['CA_CERT_FILE'] ?? '';
+$sslVerify  = $cliOpts['verify'] !== null
+    ? filter_var($cliOpts['verify'], FILTER_VALIDATE_BOOLEAN)
+    : filter_var($_ENV['SSL_VERIFY'] ?? 'true', FILTER_VALIDATE_BOOLEAN);
+
+if ($caCertFile !== '' && is_file($caCertFile)) {
+    ini_set('curl.cainfo', $caCertFile);
+    ini_set('openssl.cafile', $caCertFile);
+    $log(2, "Applied CA bundle to ini (curl.cainfo, openssl.cafile): {$caCertFile}");
+}
+
+// Combined Guzzle `verify` option: CURLOPT_SSL_VERIFYPEER/VERIFYHOST/CAINFO
+$verifyOption = $sslVerify ? ($caCertFile !== '' ? $caCertFile : true) : false;
+
+$log(2, "Config resolved: spec={$openapiSpecUrl}");
+$log(2, "Config resolved: base={$apiBaseUrl}");
+$log(2, 'Config resolved: ssl_verify=' . ($sslVerify ? 'true' : 'false') . ($caCertFile !== '' ? " (ca={$caCertFile})" : ''));
+$log(3, "Config resolved: session_dir={$sessionDir} cache_dir={$cacheDir}");
+$log(3, "Config resolved: server_name={$serverName} server_version={$serverVersion}");
+
+// Validate that critical config is non-empty (safety net for explicit empty values)
+if (empty($openapiSpecUrl) || empty($apiBaseUrl)) {
+    fwrite(STDERR, "ERROR: Missing required configuration: OPENAPI_SPEC_URL and API_BASE_URL must be set\n");
+    exit(1);
+}
 
 // Create required directories
 if (!is_dir($sessionDir)) {
@@ -70,29 +243,36 @@ if (!is_dir($cacheDir)) {
     mkdir($cacheDir, 0775, true);
 }
 
-// Initialize components
-$httpClient = new GuzzleClient([
-    'timeout' => 30,
-    'connect_timeout' => 10,
-]);
-$parser = new OpenApiParser($cacheDir, $httpClient);
-
 // Parse OpenAPI spec and build MCP server
+$log(1, "Fetching OpenAPI spec: {$openapiSpecUrl}");
 try {
-    $toolDefs = $parser->parse($openApiSpecUrl);
+    $parser = new OpenApiParser($cacheDir, new GuzzleClient([
+        'timeout' => 30,
+        'connect_timeout' => 10,
+        'verify' => $verifyOption,
+    ]));
+    $toolDefs = $parser->parse($openapiSpecUrl);
 } catch (\Throwable $e) {
     fwrite(STDERR, "ERROR: Failed to parse OpenAPI spec: " . $e->getMessage() . "\n");
     exit(1);
+}
+$log(1, sprintf('Parsed %d tools from OpenAPI spec', count($toolDefs)));
+if ($verboseLevel >= 3) {
+    foreach ($toolDefs as $td) {
+        $log(3, "  tool: {$td['name']} ({$td['httpMethod']} {$td['path']})");
+    }
 }
 
 // Build the MCP server with stdio auth
 try {
     $factory = new McpServerFactory($apiBaseUrl);
+    $factory->setSslVerify($verifyOption);
 
-    // Set stdio auth from environment variables
+    // Set stdio auth (CLI --api-key overrides env)
     $stdioAuth = [];
-    if (!empty($_ENV['API_KEY'])) {
-        $stdioAuth['api_key'] = $_ENV['API_KEY'];
+    $apiKey = $cliOpts['api_key'] ?? ($_ENV['API_KEY'] ?? '');
+    if (!empty($apiKey)) {
+        $stdioAuth['api_key'] = $apiKey;
     }
     if (!empty($_ENV['SESSION_ID'])) {
         $stdioAuth['session_id'] = $_ENV['SESSION_ID'];
@@ -102,14 +282,16 @@ try {
     }
     if (!empty($stdioAuth)) {
         $factory->setStdioAuth($stdioAuth);
+        $log(2, 'stdio auth configured: ' . implode(',', array_keys($stdioAuth)));
     }
 
-    $sessionStore = new FileSessionStore($sessionDir);
+    $sessionStore = new \Mcp\Server\Session\FileSessionStore($sessionDir, 3600);
     $mcpServer = $factory->build($serverName, $serverVersion, $toolDefs, $sessionStore);
 } catch (\Throwable $e) {
     fwrite(STDERR, "ERROR: Failed to build MCP server: " . $e->getMessage() . "\n");
     exit(1);
 }
+$log(1, 'MCP server built; awaiting STDIO input');
 
 // Create stdio transport (errors logged to STDERR per MCP spec)
 // Pass null logger - StdioTransport handles this gracefully
@@ -123,6 +305,7 @@ if (feof(\STDIN)) {
 // Run the server
 try {
     $mcpServer->run($transport);
+    $log(1, 'MCP server exited cleanly');
 } catch (\Throwable $e) {
     fwrite(STDERR, "ERROR: MCP server error: " . $e->getMessage() . "\n");
     exit(1);

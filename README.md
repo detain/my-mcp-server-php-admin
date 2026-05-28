@@ -1,191 +1,261 @@
 # Admin MCP Proxy Server
 
-A standalone MCP (Model Context Protocol) proxy server for the MyAdmin admin API. This server acts as an MCP intermediary that:
+A standalone MCP (Model Context Protocol) proxy server for the MyAdmin admin API.
+This server fetches its tool definitions from a remote OpenAPI spec and handles MCP
+protocol communication via either STDIO (for local clients like Claude Desktop / Cursor)
+or Streamable HTTP transport (for remote clients).
 
-- Fetches the OpenAPI spec from a remote URL
-- Exposes MCP tools generated from the spec
-- Proxies tool calls to the actual admin API
-- Supports OAuth 2.1 protected resource metadata
+## Features
+
+- **Dual transport** — `bin/mcp` is a single launcher that runs STDIO (default) or
+  spawns an HTTP server via `--http`.
+- **Streamable HTTP transport** — Standard MCP 2025 protocol support.
+- **Dynamic tool loading** — Fetches tool definitions from a remote OpenAPI spec
+  (JSON or YAML auto-detected).
+- **Conditional cache refresh** — Cache invalidated via `Last-Modified` HEAD check,
+  with stale-cache fallback if the remote fetch fails.
+- **File-based session persistence** — Sessions stored on disk with TTL expiry
+  (via the upstream MCP SDK).
+- **OAuth 2.1 metadata** — Both protected-resource (RFC 9700) and
+  authorization-server (RFC 8414) `.well-known` endpoints.
+- **Auth header forwarding** — Passes `Authorization` (Bearer), `X-API-KEY`, and
+  `sessionid` through to the upstream API.
+- **TLS controls** — Configurable CA bundle and peer/host verification (CLI flags
+  or env vars).
+- **CORS** — Preflight + response headers for browser-based MCP clients.
 
 ## Requirements
 
-- PHP 8.2+
+- PHP 8.2 or higher
 - Composer
 
 ## Installation
 
-1. Clone the repository and install dependencies:
-
 ```bash
-cd admin-mcp-proxy
+# Clone/copy the project
+cp -r admin-mcp-proxy /path/to/admin-mcp-proxy
+cd /path/to/admin-mcp-proxy
+
+# Install dependencies
 composer install
 ```
 
-2. Copy the environment template and configure:
+## Configuration
+
+Copy `.env.example` to `.env` and edit:
 
 ```bash
 cp .env.example .env
-# Edit .env with your settings
 ```
 
-3. Configure the environment variables:
+### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAPI_SPEC_URL` | URL to fetch the OpenAPI admin spec from | `https://my.interserver.net/admin/spec/openapi-admin.yaml` |
-| `API_BASE_URL` | Base URL of the admin API to proxy to | `https://my.interserver.net/apiv2/admin` |
-| `SESSION_DIR` | Directory for session storage | `/tmp/mcp_admin_sessions` |
-| `CACHE_DIR` | Directory for cached tool definitions | `/tmp/mcp_admin_cache` |
-| `SERVER_NAME` | MCP server name | `myadmin-admin-mcp` |
-| `SERVER_VERSION` | MCP server version | `1.0.0` |
+All variables have working defaults — set them only to override.
 
-## Web Server Configuration
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAPI_SPEC_URL` | `https://my.interserver.net/admin/spec/openapi-admin.yaml` | URL to fetch OpenAPI admin spec from (JSON or YAML) |
+| `API_BASE_URL` | `https://my.interserver.net/apiv2/admin` | Base URL of the upstream admin API |
+| `SESSION_DIR` | `/tmp/mcp_admin_sessions` | Directory for session storage |
+| `CACHE_DIR` | `/tmp/mcp_admin_cache` | Directory for cached tool definitions |
+| `SERVER_NAME` | `myadmin-admin-mcp` | Name advertised in MCP handshake |
+| `SERVER_VERSION` | `1.0.0` | Version advertised in MCP handshake |
+| `API_KEY` | — | API key (STDIO mode auth) |
+| `SESSION_ID` | — | Session ID (STDIO mode auth) |
+| `BEARER_TOKEN` | — | Bearer token (STDIO mode auth) |
+| `CA_CERT_FILE` | — | Path to a CA bundle (PEM). Applied via `ini_set` to `curl.cainfo` and `openssl.cafile`, and passed to Guzzle (sets `CURLOPT_CAINFO`). Leave empty to use the system trust store. |
+| `SSL_VERIFY` | `true` | Verify TLS peer + host on outbound calls. Maps to `CURLOPT_SSL_VERIFYPEER` + `CURLOPT_SSL_VERIFYHOST`. |
 
-### Apache (`.htaccess`)
+## Running the Server
 
+Three ways to bring up the proxy:
+
+### 1. STDIO mode via `bin/mcp` (Claude Desktop / Cursor / local CLI)
+
+```bash
+chmod +x bin/mcp
+bin/mcp                  # STDIO is the default
+bin/mcp --stdio          # explicit
+```
+
+### 2. HTTP mode via `bin/mcp` (spawns PHP built-in server)
+
+```bash
+bin/mcp --http                          # binds 127.0.0.1:8080
+bin/mcp --http --host=0.0.0.0 --port=9000
+```
+
+`--http` runs `php -S {host}:{port} -t public/` in the background, redirects
+its output to `mcp-server-out.log` / `mcp-server-err.log` in the project root,
+and exits. The spawned server keeps running until killed.
+
+### 3. Your own web server (production)
+
+Configure Apache, Nginx, or LiteSpeed to serve the `public/` directory.
+
+Example Apache vhost:
 ```apache
-RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ public/index.php [QSA,L]
+<VirtualHost *:443>
+    ServerName admin-mcp-proxy.example.com
+    DocumentRoot /path/to/admin-mcp-proxy/public
+
+    <Directory /path/to/admin-mcp-proxy/public>
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ /index.php [QSA,L]
+
+    CGIPassAuth On
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+</VirtualHost>
 ```
 
-### Nginx
-
+Example Nginx config:
 ```nginx
-location / {
-    try_files $uri $uri/ /public/index.php?$query_string;
-}
+server {
+    listen 443 ssl;
+    server_name admin-mcp-proxy.example.com;
+    root /path/to/admin-mcp-proxy/public;
+    index index.php;
 
-location ~ \.php$ {
-    fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    include fastcgi_params;
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_pass_header Authorization;
+    }
 }
 ```
 
-### LiteSpeed
+## `bin/mcp` CLI Reference
 
-The server is designed to work with LiteSpeed Web Server. Point the document root to the `public/` directory.
+```
+Usage: bin/mcp [options]
 
-## Endpoints
+Options:
+  -h, --help              Show help and exit
+  -v, -vv, -vvv           Verbose output to STDERR (1=info, 2=debug, 3=trace)
 
-| Path | Method | Description |
-|------|--------|-------------|
-| `/mcp` | POST | MCP JSON-RPC endpoint |
-| `/mcp` | GET | SSE streaming endpoint (for server-initiated responses) |
-| `/mcp` | DELETE | Session termination |
-| `/.well-known/oauth-protected-resource` | GET | OAuth 2.1 protected resource metadata |
-| `/.well-known/oauth-authorization-server` | GET | OAuth authorization server metadata |
+  --stdio                 Run STDIO transport (default)
+  --http                  Spawn `php -S` against public/ in the background and exit
+  --host=HOST             HTTP bind host                (default: 127.0.0.1)
+  --port=PORT             HTTP bind port                (default: 8080)
+
+  --openapi-spec=URL      Override OPENAPI_SPEC_URL
+  --base-url=URL          Override API_BASE_URL
+  --api-key=KEY           Override API_KEY (STDIO auth)
+  --verify=true|false     Override SSL_VERIFY
+  --ca-cert=PATH          Override CA_CERT_FILE
+```
+
+**Precedence:** CLI flags > environment variables > built-in defaults.
+
+`--stdio` and `--http` are mutually exclusive. `--help` and `--http` both work
+in a fresh checkout without `composer install`.
+
+### Examples
+
+```bash
+# STDIO with verbose info logging
+bin/mcp -v
+
+# STDIO with a one-off API key override
+bin/mcp --api-key=sk_live_xxx
+
+# HTTP on all interfaces, port 9090
+bin/mcp --http --host=0.0.0.0 --port=9090
+
+# STDIO pointing at a different spec, with a self-signed CA bundle
+bin/mcp --openapi-spec=https://staging.example/admin.yaml --ca-cert=/etc/ssl/staging-ca.pem
+
+# Disable TLS verification (testing only)
+bin/mcp --http --verify=false
+```
+
+## API Endpoints
+
+### MCP Protocol Endpoint
+
+```
+POST   /          Send MCP JSON-RPC messages
+GET    /          SSE streaming endpoint (server-initiated responses)
+DELETE /          Close MCP session
+OPTIONS /         CORS preflight
+```
+
+### OAuth Metadata Endpoints
+
+```
+GET /.well-known/oauth-protected-resource     RFC 9700 protected resource metadata
+GET /.well-known/oauth-authorization-server   RFC 8414 authorization server metadata
+```
+
+The admin proxy advertises `/oauth/bshaffer` on the same host as the authorization
+server. Supported scopes: `admin`, `admin_login`, `read`, `write`.
 
 ## Authentication
 
-The proxy supports multiple authentication methods:
+The proxy forwards the first valid auth credential it finds to the upstream admin API:
 
-1. **Bearer Token** - `Authorization: Bearer <token>`
-2. **API Key** - `X-API-KEY: <key>`
-3. **Session ID** - `sessionid: <session_id>`
+- **Bearer Token**: `Authorization: Bearer <token>`
+- **API Key**: `X-API-KEY: <key>`
+- **Session ID**: `sessionid: <session_id>`
 
-The proxy forwards the first valid auth credential it finds to the upstream API.
+For STDIO mode you can also pass `API_KEY` / `SESSION_ID` / `BEARER_TOKEN` via env
+or `--api-key=` on the CLI; they're used as a fallback when no incoming auth header
+is present.
 
-## STDIO Transport (Claude Desktop / Cursor)
+## Claude Desktop / Cursor Integration
 
-The proxy supports stdio transport for local AI tool integration, suitable for use with Claude Desktop, Cursor, and other MCP clients that communicate over stdio.
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS),
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows), or
+`~/.config/Claude/claude_desktop_config.json` (Linux):
 
-### Usage
+```json
+{
+  "mcpServers": {
+    "myadmin-admin": {
+      "command": "php",
+      "args": ["/path/to/admin-mcp-proxy/bin/mcp"],
+      "env": {
+        "OPENAPI_SPEC_URL": "https://my.interserver.net/admin/spec/openapi-admin.yaml",
+        "API_BASE_URL": "https://my.interserver.net/apiv2/admin",
+        "BEARER_TOKEN": "your_bearer_token"
+      }
+    }
+  }
+}
+```
+
+Same JSON works for Cursor (Settings → MCP Servers).
+
+You can also pass overrides via CLI args instead of env, e.g.:
+
+```json
+"args": ["/path/to/admin-mcp-proxy/bin/mcp", "--api-key=sk_live_xxx", "-v"]
+```
+
+## Tool Caching
+
+Tool definitions from the OpenAPI spec are cached in `CACHE_DIR` and invalidated
+when the remote spec's `Last-Modified` header advances. If the remote fetch fails,
+the proxy serves from stale cache rather than crashing.
+
+To force a refresh, delete the cache files:
 
 ```bash
-# Install dependencies
-composer install
-
-# Make the CLI executable
-chmod +x bin/mcp
-
-# Run with environment variables
-OPENAPI_SPEC_URL=https://my.interserver.net/admin/spec/openapi-admin.yaml \
-API_BASE_URL=https://my.interserver.net/apiv2/admin \
-BEARER_TOKEN=your_bearer_token \
-bin/mcp
+rm -f /tmp/mcp_admin_cache/mcp_tools_*.php
 ```
 
-### Environment Variables for STDIO Mode
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENAPI_SPEC_URL` | No | `https://my.interserver.net/admin/spec/openapi-admin.yaml` | URL to fetch OpenAPI spec from |
-| `API_BASE_URL` | No | `https://my.interserver.net/apiv2/admin` | Base URL of the admin API |
-| `API_KEY` | No | - | API key for authentication |
-| `SESSION_ID` | No | - | Session ID for authentication |
-| `BEARER_TOKEN` | No | - | Bearer token for authentication |
-| `SESSION_DIR` | No | `/tmp/mcp_admin_sessions` | Directory for session storage |
-| `CACHE_DIR` | No | `/tmp/mcp_admin_cache` | Directory for cached tool definitions |
-| `SERVER_NAME` | No | `myadmin-admin-mcp` | MCP server name |
-| `SERVER_VERSION` | No | `1.0.0` | MCP server version |
-
-### Claude Desktop Configuration
-
-Add to your Claude Desktop configuration file:
-
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-**Linux:** `~/.config/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "myadmin-admin": {
-      "command": "php",
-      "args": ["/path/to/admin-mcp-proxy/bin/mcp"],
-      "env": {
-        "OPENAPI_SPEC_URL": "https://my.interserver.net/admin/spec/openapi-admin.yaml",
-        "API_BASE_URL": "https://my.interserver.net/apiv2/admin",
-        "BEARER_TOKEN": "your_bearer_token"
-      }
-    }
-  }
-}
-```
-
-### Cursor Configuration
-
-Add to Cursor settings (Settings → MCP Servers):
-
-```json
-{
-  "mcpServers": {
-    "myadmin-admin": {
-      "command": "php",
-      "args": ["/path/to/admin-mcp-proxy/bin/mcp"],
-      "env": {
-        "OPENAPI_SPEC_URL": "https://my.interserver.net/admin/spec/openapi-admin.yaml",
-        "API_BASE_URL": "https://my.interserver.net/apiv2/admin",
-        "BEARER_TOKEN": "your_bearer_token"
-      }
-    }
-  }
-}
-```
-
-### Notes
-
-- Errors are logged to STDERR (per MCP stdio specification)
-- The server exits cleanly on EOF (end-of-file) from STDIN
-- Sessions are stored in `SESSION_DIR` for state management
-
-## Session Persistence
-
-Sessions are stored as JSON files in the configured `SESSION_DIR`. To clean up stale sessions:
-
-```php
-use AdminMcp\FileSessionStore;
-
-$store = new FileSessionStore('/tmp/mcp_admin_sessions');
-$cleaned = $store->cleanupStaleSessions(86400); // Clean sessions older than 24 hours
-```
-
-## Caching
-
-Tool definitions are cached as PHP files in `CACHE_DIR` for 1 hour. To force a fresh fetch:
+Or programmatically:
 
 ```php
 use AdminMcp\OpenApiParser;
@@ -194,35 +264,29 @@ $parser = new OpenApiParser('/tmp/mcp_admin_cache');
 $parser->clearCache('https://my.interserver.net/admin/spec/openapi-admin.yaml');
 ```
 
-## Running
+## Troubleshooting
 
-### Development
+### "Failed to fetch OpenAPI spec"
 
-```bash
-php -S localhost:8080 -t public
-```
+- Verify `OPENAPI_SPEC_URL` is reachable from the server.
+- If you're behind a private CA, set `CA_CERT_FILE=/path/to/ca.pem`.
+- For self-signed dev backends, set `SSL_VERIFY=false` (or `--verify=false`).
 
-### Production
+### "Missing required configuration"
 
-Configure your web server to serve the `public/` directory and point to `public/index.php` as the entry point.
+- Defaults are provided for `OPENAPI_SPEC_URL` and `API_BASE_URL`. This error only
+  fires if you explicitly set them to an empty value in `.env` or the environment.
 
-## OAuth 2.1 Compliance
+### `bin/mcp --http` says "exited immediately"
 
-This server implements the OAuth 2.1 protected resource specification:
+- Port already in use, permission denied (binding < 1024 without root), or PHP
+  failed to start. Check `mcp-server-err.log` in the project root.
 
-- Exposes `/.well-known/oauth-protected-resource` metadata endpoint
-- Supports Bearer token authentication
-- Includes resource indicator in token validation
+### Session issues
 
-## MCP Protocol
-
-This server implements the Streamable HTTP transport for MCP:
-
-- POST requests for JSON-RPC messages
-- GET requests for SSE streaming (server-initiated responses)
-- DELETE for session termination
-- Session IDs via `Mcp-Session-Id` header
+- Ensure `SESSION_DIR` is writable.
+- Sessions expire after 1 hour by default.
 
 ## License
 
-Proprietary - InterServer
+Proprietary - InterServer Inc.

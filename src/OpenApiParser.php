@@ -9,7 +9,7 @@ use GuzzleHttp\Exception\GuzzleException;
 use Symfony\Component\Yaml\Yaml;
 
 /**
- * Parses an OpenAPI 3.x YAML spec fetched from a URL and extracts tool definitions
+ * Parses an OpenAPI 3.x YAML/JSON spec fetched from a URL and extracts tool definitions
  * suitable for registering as MCP tools.
  */
 class OpenApiParser
@@ -25,39 +25,40 @@ class OpenApiParser
             'timeout' => 30,
             'connect_timeout' => 10,
         ]);
-
-        if (!is_dir($this->cacheDir)) {
-            mkdir($this->cacheDir, 0755, true);
-        }
     }
 
     /**
-     * Fetch OpenAPI spec from URL and return an array of tool definitions.
-     * Results are cached as a PHP file for opcache efficiency.
+     * Fetch OpenAPI spec from URL, parse it, and return tool definitions.
+     * Cache is refreshed only when the remote spec's Last-Modified header
+     * is newer than the cached file. Falls back to stale cache on fetch failure.
      *
      * @return array<int, array{name: string, description: string, httpMethod: string, path: string, inputSchema: array, pathParams: string[], queryParams: string[], hasBody: bool}>
      */
     public function parse(string $specUrl): array
     {
-        $cacheKey = md5($specUrl);
-        $cacheFile = $this->cacheDir . '/mcp_tools_' . $cacheKey . '.php';
+        $cacheFile = $this->cacheDir . '/mcp_tools_' . md5($specUrl) . '.php';
 
-        // Check if cache exists and is less than 1 hour old
-        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 3600) {
-            return require $cacheFile;
+        // Check cache - skip HTTP fetch if cache is at least as new as remote spec
+        if (file_exists($cacheFile)) {
+            $cacheAge = filemtime($cacheFile);
+            $specAge = $this->getRemoteSpecAge($specUrl);
+
+            if ($specAge === null || $cacheAge >= $specAge) {
+                return require $cacheFile;
+            }
         }
 
         try {
-            $response = $this->httpClient->get($specUrl);
-            $yamlContent = (string) $response->getBody();
-            $this->spec = Yaml::parse($yamlContent);
-        } catch (GuzzleException $e) {
+            $specContent = $this->fetchSpec($specUrl);
+        } catch (\RuntimeException $e) {
             // If fetch fails but cache exists, use stale cache
             if (file_exists($cacheFile)) {
                 return require $cacheFile;
             }
-            throw new \RuntimeException('Failed to fetch OpenAPI spec: ' . $e->getMessage(), 0, $e);
+            throw $e;
         }
+
+        $this->spec = $this->parseSpecContent($specContent);
 
         $tools = $this->extractTools();
 
@@ -75,12 +76,78 @@ class OpenApiParser
      */
     public function clearCache(string $specUrl): void
     {
-        $cacheKey = md5($specUrl);
-        $cacheFile = $this->cacheDir . '/mcp_tools_' . $cacheKey . '.php';
+        $cacheFile = $this->cacheDir . '/mcp_tools_' . md5($specUrl) . '.php';
 
         if (file_exists($cacheFile)) {
             unlink($cacheFile);
         }
+    }
+
+    /**
+     * Fetch the remote spec to get its last-modified time.
+     * Returns null if unable to determine.
+     */
+    private function getRemoteSpecAge(string $specUrl): ?int
+    {
+        try {
+            $response = $this->httpClient->head($specUrl);
+            $lastModified = $response->getHeaderLine('Last-Modified');
+
+            if ($lastModified) {
+                $timestamp = strtotime($lastModified);
+                return $timestamp !== false ? $timestamp : null;
+            }
+        } catch (GuzzleException) {
+            // Ignore - will refresh cache
+        }
+
+        return null;
+    }
+
+    /**
+     * Fetch the OpenAPI spec from URL.
+     *
+     * @throws \RuntimeException If fetching fails
+     */
+    private function fetchSpec(string $specUrl): string
+    {
+        try {
+            $response = $this->httpClient->get($specUrl, [
+                'headers' => [
+                    'Accept' => 'application/json, application/x-yaml, text/yaml, text/x-yaml',
+                ],
+            ]);
+
+            $content = (string) $response->getBody();
+
+            if (empty($content)) {
+                throw new \RuntimeException('Empty response from OpenAPI spec URL');
+            }
+
+            return $content;
+        } catch (GuzzleException $e) {
+            throw new \RuntimeException('Failed to fetch OpenAPI spec: ' . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
+     * Parse the spec content (JSON or YAML).
+     */
+    private function parseSpecContent(string $content): array
+    {
+        // Try JSON first
+        $decoded = json_decode($content, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        // Fall back to YAML
+        $parsed = Yaml::parse($content);
+        if (is_array($parsed)) {
+            return $parsed;
+        }
+
+        throw new \RuntimeException('Unable to parse OpenAPI spec as JSON or YAML');
     }
 
     /**
