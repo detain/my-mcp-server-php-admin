@@ -1,0 +1,62 @@
+# Files excluded from the .mcpb archive (gitignore-style globs).
+# Keep only what the STDIO launcher actually needs at runtime:
+#   manifest.json, bin/mcp, src/, public/, vendor/, composer.json, .env.example
+# Everything else is dev/CI tooling and only bloats the bundle.
+
+# VCS / CI / tooling
+.git/
+.github/
+.gitignore
+.caliber/
+.claude/
+
+# Tests
+tests/
+phpunit.xml.dist
+phpstan.neon.dist
+phpstan-baseline.neon
+.phpunit.cache/
+.phpunit.result.cache
+tools/
+
+# Coverage
+coverage/
+coverage-xml/
+coverage.xml
+coverage.clover
+clover.xml
+
+# Local env (never ship secrets)
+.env
+
+# Runtime state (host-managed)
+var/cache/
+var/sessions/
+mcp-server-out.log
+mcp-server-err.log
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Generated bundles
+*.mcpb
+
+# Dev-only composer deps (already declared in require-dev; vendor/ should be
+# rebuilt with `composer install --no-dev --optimize-autoloader` before packing.
+# This rule is defensive in case someone packs without --no-dev.)
+vendor/phpstan/
+vendor/phpunit/
+vendor/sebastian/
+vendor/theseer/
+vendor/myclabs/
+vendor/phar-io/
+vendor/phpdocumentor/
+vendor/doctrine/instantiator/
+vendor/nikic/php-parser/
+vendor/bin/phpstan
+vendor/bin/phpstan.phar
+vendor/bin/phpunit

@@ -322,6 +322,61 @@ by `tests/Integration/`.
 GitHub Actions runs the same `composer ci` pipeline on every push and PR
 across PHP 8.2 / 8.3 / 8.4, and uploads Clover coverage to Codecov.
 
+## MCPB Bundle (`.mcpb`)
+
+This repo ships a `manifest.json` so it can be packaged as a [MCP Bundle](https://github.com/anthropics/mcpb)
+for single-click installation in Claude for macOS / Windows and other
+MCPB-compatible hosts.
+
+The bundle is `server.type = "binary"` and invokes `php ${__dirname}/bin/mcp --stdio`,
+so the host machine **must have PHP 8.2+ on `PATH` as `php`**. Composer dependencies
+are bundled in `vendor/`, so end users do not need Composer.
+
+### Build the bundle
+
+```bash
+# 1. Install the MCPB CLI (one-time, global)
+npm install -g @anthropic-ai/mcpb
+
+# 2. Rebuild vendor/ without dev deps so the archive stays small
+composer install --no-dev --optimize-autoloader
+
+# 3. Validate the manifest
+mcpb validate manifest.json
+
+# 4. Pack — produces myadmin-admin-mcp-1.0.0.mcpb in the project root
+mcpb pack
+
+# 5. (optional) Restore dev deps for local development
+composer install
+```
+
+The resulting `.mcpb` is a zip archive of everything except the paths listed
+in `.mcpbignore` (tests, coverage, CI config, dev composer packages, etc.).
+
+### Install the bundle
+
+- **Claude Desktop**: double-click the `.mcpb` file, or drag it into
+  Settings → Extensions. The host collects the credentials defined in
+  `user_config` (Bearer Token / API Key / Session ID, OpenAPI Spec URL,
+  API Base URL, CA bundle, TLS verification) before activation.
+- **Other MCPB hosts**: see the host's documentation for installation flow.
+
+### `user_config` collected at install time
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `openapi_spec_url` | string | no | MyAdmin prod spec | OpenAPI spec URL (JSON or YAML) |
+| `api_base_url` | string | no | MyAdmin prod API | Upstream API base URL |
+| `bearer_token` | string (sensitive) | no | — | OAuth bearer; first non-empty credential wins |
+| `api_key` | string (sensitive) | no | — | `X-API-KEY` value |
+| `session_id` | string (sensitive) | no | — | `sessionid` value |
+| `ca_cert_file` | file | no | — | PEM CA bundle for private TLS |
+| `ssl_verify` | boolean | no | `true` | Verify TLS peer + host |
+
+Cache and session state are written to `${bundle_dir}/var/cache` and
+`${bundle_dir}/var/sessions` so each install stays self-contained.
+
 ## License
 
 Proprietary - InterServer Inc.

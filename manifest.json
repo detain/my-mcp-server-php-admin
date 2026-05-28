@@ -1,0 +1,108 @@
+{
+  "manifest_version": "0.3",
+  "name": "myadmin-admin-mcp",
+  "display_name": "MyAdmin Admin MCP Proxy",
+  "version": "1.0.0",
+  "description": "MCP proxy for the MyAdmin admin API. Tools are generated dynamically from a remote OpenAPI spec.",
+  "long_description": "Standalone MCP (Model Context Protocol) proxy server for the MyAdmin admin API.\n\nThe server fetches its tool definitions from a remote OpenAPI spec at startup, caches them on disk with `Last-Modified` invalidation (with stale-cache fallback), and proxies each tool call to the upstream admin API. Authentication credentials (Bearer Token, X-API-KEY, or sessionid) are forwarded from the request context — or, in STDIO mode, supplied via the user configuration below.\n\n**Runtime requirement:** this bundle runs the existing PHP launcher, so PHP 8.2 or higher must be installed and available on the host's `PATH` as `php`. The bundle ships its own `vendor/` (Composer dependencies) so `composer install` is not required on end-user machines.\n\n**Transport:** STDIO only. The bundled HTTP mode is not exposed through MCPB.",
+  "author": {
+    "name": "InterServer Inc.",
+    "email": "support@interserver.net",
+    "url": "https://www.interserver.net"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/detain/my-mcp-server-php-admin.git"
+  },
+  "homepage": "https://github.com/detain/my-mcp-server-php-admin",
+  "documentation": "https://github.com/detain/my-mcp-server-php-admin#readme",
+  "support": "https://github.com/detain/my-mcp-server-php-admin/issues",
+  "license": "proprietary",
+  "keywords": ["mcp", "interserver", "myadmin", "openapi", "proxy", "admin", "php"],
+  "privacy_policies": ["https://www.interserver.net/privacy.html"],
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/mcp",
+    "mcp_config": {
+      "command": "php",
+      "args": [
+        "${__dirname}/bin/mcp",
+        "--stdio"
+      ],
+      "env": {
+        "OPENAPI_SPEC_URL": "${user_config.openapi_spec_url}",
+        "API_BASE_URL": "${user_config.api_base_url}",
+        "BEARER_TOKEN": "${user_config.bearer_token}",
+        "API_KEY": "${user_config.api_key}",
+        "SESSION_ID": "${user_config.session_id}",
+        "CA_CERT_FILE": "${user_config.ca_cert_file}",
+        "SSL_VERIFY": "${user_config.ssl_verify}",
+        "SESSION_DIR": "${__dirname}/var/sessions",
+        "CACHE_DIR": "${__dirname}/var/cache",
+        "SERVER_NAME": "myadmin-admin-mcp",
+        "SERVER_VERSION": "1.0.0"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "openapi_proxy",
+      "description": "Tools are generated at runtime from the remote OpenAPI spec — one MCP tool per HTTP operation. See OPENAPI_SPEC_URL for the source of truth."
+    }
+  ],
+  "tools_generated": true,
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"]
+  },
+  "user_config": {
+    "openapi_spec_url": {
+      "type": "string",
+      "title": "OpenAPI Spec URL",
+      "description": "URL to fetch the OpenAPI spec from (JSON or YAML, auto-detected). Defaults to the MyAdmin production spec.",
+      "default": "https://my.interserver.net/admin/spec/openapi-admin.yaml",
+      "required": false
+    },
+    "api_base_url": {
+      "type": "string",
+      "title": "API Base URL",
+      "description": "Base URL of the upstream admin API that tool calls are proxied to.",
+      "default": "https://my.interserver.net/apiv2/admin",
+      "required": false
+    },
+    "bearer_token": {
+      "type": "string",
+      "title": "Bearer Token",
+      "description": "OAuth bearer token. Provide one of: Bearer Token, API Key, or Session ID. The first non-empty credential wins.",
+      "sensitive": true,
+      "required": false
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API Key",
+      "description": "X-API-KEY value. Provide one of: Bearer Token, API Key, or Session ID.",
+      "sensitive": true,
+      "required": false
+    },
+    "session_id": {
+      "type": "string",
+      "title": "Session ID",
+      "description": "sessionid value. Provide one of: Bearer Token, API Key, or Session ID.",
+      "sensitive": true,
+      "required": false
+    },
+    "ca_cert_file": {
+      "type": "file",
+      "title": "CA Bundle (PEM)",
+      "description": "Optional path to a CA bundle for self-signed or private TLS. Leave empty to use the system trust store.",
+      "required": false
+    },
+    "ssl_verify": {
+      "type": "boolean",
+      "title": "Verify TLS",
+      "description": "Verify TLS peer and host on outbound API calls. Disable only for local development against self-signed certs.",
+      "default": true,
+      "required": false
+    }
+  }
+}

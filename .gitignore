@@ -33,3 +33,6 @@ clover.xml
 # Local-only tooling artifacts that aren't part of the project
 /.caliber/
 /.claude/
+
+# Generated MCPB bundles
+*.mcpb

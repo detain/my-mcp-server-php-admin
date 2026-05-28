@@ -200,13 +200,25 @@ if (file_exists($envFile)) {
     }
 }
 
-// Configuration: CLI > env > default (with admin-specific defaults)
-$openapiSpecUrl = $cliOpts['openapi_spec'] ?? $_ENV['OPENAPI_SPEC_URL'] ?? 'https://my.interserver.net/admin/spec/openapi-admin.yaml';
-$apiBaseUrl     = $cliOpts['base_url']     ?? $_ENV['API_BASE_URL']     ?? 'https://my.interserver.net/apiv2/admin';
-$sessionDir     = $_ENV['SESSION_DIR']    ?? '/tmp/mcp_admin_sessions';
-$cacheDir       = $_ENV['CACHE_DIR']      ?? '/tmp/mcp_admin_cache';
-$serverName     = $_ENV['SERVER_NAME']    ?? 'myadmin-admin-mcp';
-$serverVersion  = $_ENV['SERVER_VERSION'] ?? '1.0.0';
+// Configuration: CLI > env > default (with admin-specific defaults).
+// Use a coalesce that treats empty strings as "unset" — MCPB hosts substitute
+// `${user_config.X}` with "" when an optional field is blank, and `??` only
+// catches `null`. Without this, blanks from the bundle host would override the
+// built-in defaults below.
+$coalesce = static function (...$values): string {
+    foreach ($values as $v) {
+        if ($v !== null && $v !== '') {
+            return (string) $v;
+        }
+    }
+    return '';
+};
+$openapiSpecUrl = $coalesce($cliOpts['openapi_spec'], $_ENV['OPENAPI_SPEC_URL'] ?? null, 'https://my.interserver.net/admin/spec/openapi-admin.yaml');
+$apiBaseUrl     = $coalesce($cliOpts['base_url'],     $_ENV['API_BASE_URL']     ?? null, 'https://my.interserver.net/apiv2/admin');
+$sessionDir     = $coalesce($_ENV['SESSION_DIR']    ?? null, '/tmp/mcp_admin_sessions');
+$cacheDir       = $coalesce($_ENV['CACHE_DIR']      ?? null, '/tmp/mcp_admin_cache');
+$serverName     = $coalesce($_ENV['SERVER_NAME']    ?? null, 'myadmin-admin-mcp');
+$serverVersion  = $coalesce($_ENV['SERVER_VERSION'] ?? null, '1.0.0');
 
 // SSL / TLS configuration: CLI > env > default
 $caCertFile = $cliOpts['ca_cert'] ?? $_ENV['CA_CERT_FILE'] ?? '';
