@@ -11,9 +11,22 @@ use Symfony\Component\Yaml\Yaml;
 /**
  * Parses an OpenAPI 3.x YAML/JSON spec fetched from a URL and extracts tool definitions
  * suitable for registering as MCP tools.
+ *
+ * @phpstan-type ToolDef array{
+ *     name: string,
+ *     description: string,
+ *     httpMethod: string,
+ *     path: string,
+ *     inputSchema: array<string, mixed>,
+ *     pathParams: list<string>,
+ *     queryParams: list<string>,
+ *     hasBody: bool,
+ *     annotations: array<string, mixed>
+ * }
  */
 class OpenApiParser
 {
+    /** @var array<string, mixed> */
     private array $spec = [];
     private string $cacheDir;
     private GuzzleClient $httpClient;
@@ -32,7 +45,7 @@ class OpenApiParser
      * Cache is refreshed only when the remote spec's Last-Modified header
      * is newer than the cached file. Falls back to stale cache on fetch failure.
      *
-     * @return array<int, array{name: string, description: string, httpMethod: string, path: string, inputSchema: array, pathParams: string[], queryParams: string[], hasBody: bool}>
+     * @return list<ToolDef>
      */
     public function parse(string $specUrl): array
     {
@@ -132,6 +145,8 @@ class OpenApiParser
 
     /**
      * Parse the spec content (JSON or YAML).
+     *
+     * @return array<string, mixed>
      */
     private function parseSpecContent(string $content): array
     {
@@ -152,6 +167,8 @@ class OpenApiParser
 
     /**
      * Walk all paths and operations, producing one tool definition per operation.
+     *
+     * @return list<ToolDef>
      */
     private function extractTools(): array
     {
@@ -176,7 +193,12 @@ class OpenApiParser
         return $tools;
     }
 
-    private function buildToolDefinition(string $path, string $httpMethod, array $operation, array $sharedParams): ?array
+    /**
+     * @param array<string, mixed> $operation
+     * @param list<array<string, mixed>> $sharedParams
+     * @return ToolDef
+     */
+    private function buildToolDefinition(string $path, string $httpMethod, array $operation, array $sharedParams): array
     {
         $operationId = $operation['operationId'] ?? $this->generateOperationId($path, $httpMethod);
         $method = strtoupper($httpMethod);
@@ -305,6 +327,10 @@ class OpenApiParser
         ];
     }
 
+    /**
+     * @param array<string, mixed> $operation
+     * @return array<string, mixed>|null
+     */
     private function extractRequestBodySchema(array $operation): ?array
     {
         if (!isset($operation['requestBody'])) {
@@ -325,6 +351,10 @@ class OpenApiParser
         return $schema;
     }
 
+    /**
+     * @param array<string, mixed> $item
+     * @return array<string, mixed>
+     */
     private function resolveRef(array $item): array
     {
         if (!isset($item['$ref'])) {
@@ -349,6 +379,10 @@ class OpenApiParser
         return is_array($resolved) ? $this->resolveRef($resolved) : $item;
     }
 
+    /**
+     * @param array<string, mixed> $schema
+     * @return array<string, mixed>
+     */
     private function simplifySchema(array $schema): array
     {
         $schema = $this->resolveRef($schema);

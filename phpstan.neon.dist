@@ -1,0 +1,44 @@
+includes:
+    - vendor/phpstan/phpstan-deprecation-rules/rules.neon
+    - phpstan-baseline.neon
+
+parameters:
+    # Start at level 6 — a sensible mid-point. Raise toward 9 over time;
+    # regenerate the baseline with `composer phpstan-baseline` so the CI
+    # gate doesn't block while we ratchet up.
+    level: 6
+
+    paths:
+        - src
+        - bin
+        - public
+        - tests
+
+    excludePaths:
+        analyseAndScan:
+            - tests/Fixtures/*
+
+    fileExtensions:
+        - php
+
+    treatPhpDocTypesAsCertain: false
+    # Don't fail if an ignore pattern doesn't match — patterns may be defensive
+    # against issues that don't currently exist or vary across PHP versions.
+    reportUnmatchedIgnoredErrors: false
+
+    # Strict rules are great but produce a lot of noise on test code
+    # (PHPUnit's $this->assertSame() style triggers "dynamic call to static
+    # method"). Apply them only to production source.
+    # We do this via a separate analyse pass in CI, OR by ignoring the
+    # noisy patterns from tests below.
+    ignoreErrors:
+        - identifier: missingType.iterableValue
+          path: bin/mcp
+        - identifier: missingType.iterableValue
+          path: public/index.php
+        - identifier: missingType.iterableValue
+          path: tests/*
+        # PHPUnit's $this->assertX() pattern — perfectly valid, strict rules disagree.
+        - '#Dynamic call to static method PHPUnit\\Framework\\(Assert|TestCase)::.+#'
+        # Test helper return types are wide on purpose
+        - '#Method AdminMcp\\Tests\\.+ has no return type specified#'

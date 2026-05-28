@@ -25,6 +25,9 @@ class McpServerFactory
     /** @var bool|string Guzzle verify option: true (system CA), false (no verify), or path to CA bundle. */
     private bool|string $sslVerify = true;
 
+    /** @var (callable(bool|string): GuzzleClient)|null Test seam for injecting a GuzzleClient. */
+    private $httpClientFactory = null;
+
     public function __construct(string $apiBaseUrl)
     {
         $this->apiBaseUrl = rtrim($apiBaseUrl, '/');
@@ -54,9 +57,21 @@ class McpServerFactory
     }
 
     /**
+     * Inject a custom HTTP client factory. Primarily a test seam — pass a callable
+     * that receives the resolved $sslVerify option and returns a configured
+     * GuzzleHttp\Client (or compatible). If unset, a default GuzzleClient is built.
+     *
+     * @param callable(bool|string): GuzzleClient $factory
+     */
+    public function setHttpClientFactory(callable $factory): void
+    {
+        $this->httpClientFactory = $factory;
+    }
+
+    /**
      * Build an MCP Server with tools generated from the OpenAPI spec.
      *
-     * @param array $toolDefs Tool definitions from OpenApiParser::parse()
+     * @param list<array<string, mixed>> $toolDefs Tool definitions from OpenApiParser::parse()
      */
     public function build(
         string $serverName,
@@ -98,6 +113,8 @@ class McpServerFactory
     /**
      * Create a handler closure for a single API tool.
      * The closure proxies the MCP tool call to the actual REST API endpoint.
+     *
+     * @param array<string, mixed> $toolDef
      */
     private function createHandler(array $toolDef): \Closure
     {
@@ -109,7 +126,15 @@ class McpServerFactory
         $baseUrl = $this->apiBaseUrl;
         $sslVerify = $this->sslVerify;
 
-        return function (RequestContext $ctx) use ($httpMethod, $pathTemplate, $pathParams, $queryParams, $hasBody, $baseUrl, $sslVerify) {
+        /**
+         * The SDK passes a RequestContext at runtime; declaring `object` here
+         * keeps it testable with stubs (RequestContext is `final`, so a real
+         * instance needs a real SessionInterface + CallToolRequest which is
+         * heavy for unit tests).
+         *
+         * @param object $ctx
+         */
+        return function (object $ctx) use ($httpMethod, $pathTemplate, $pathParams, $queryParams, $hasBody, $baseUrl, $sslVerify) {
             /** @var \Mcp\Schema\Request\CallToolRequest $request */
             $request = $ctx->getRequest();
             $arguments = $request->arguments ?? [];
@@ -148,12 +173,14 @@ class McpServerFactory
             // Forward an MCP request id for tracing
             $headers['X-Request-Id'] = sprintf('mcp-%s-%s', bin2hex(random_bytes(4)), date('Hi'));
 
-            $client = new GuzzleClient([
-                'timeout' => 60,
-                'connect_timeout' => 10,
-                'http_errors' => false,
-                'verify' => $sslVerify,
-            ]);
+            $client = $this->httpClientFactory !== null
+                ? ($this->httpClientFactory)($sslVerify)
+                : new GuzzleClient([
+                    'timeout' => 60,
+                    'connect_timeout' => 10,
+                    'http_errors' => false,
+                    'verify' => $sslVerify,
+                ]);
 
             $options = ['headers' => $headers];
             if (!empty($query)) {
@@ -207,7 +234,7 @@ class McpServerFactory
      *
      * @return array<string, string>
      */
-    private function extractAuthHeaders(RequestContext $ctx): array
+    private function extractAuthHeaders(object $ctx): array
     {
         $headers = [];
 

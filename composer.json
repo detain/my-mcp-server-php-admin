@@ -5,19 +5,27 @@
     "license": "proprietary",
     "require": {
         "php": ">=8.2",
-        "mcp/sdk": "dev-main",
         "guzzlehttp/guzzle": "^7.8",
-        "symfony/yaml": "^6.4|^7.0",
-        "symfony/uid": "^6.4|^7.0",
+        "mcp/sdk": "dev-main",
+        "nyholm/psr7": "^1.8",
         "php-http/message": "^1.16",
-        "nyholm/psr7": "^1.8"
+        "symfony/uid": "^6.4|^7.0",
+        "symfony/yaml": "^6.4|^7.0"
     },
     "require-dev": {
+        "phpstan/phpstan": "^1.11",
+        "phpstan/phpstan-deprecation-rules": "^1.2",
+        "phpstan/phpstan-strict-rules": "^1.6",
         "phpunit/phpunit": "^9.6"
     },
     "autoload": {
         "psr-4": {
             "AdminMcp\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "AdminMcp\\Tests\\": "tests/"
         }
     },
     "bin": ["bin/mcp"],
@@ -37,8 +45,28 @@
             "@ensure-dirs"
         ],
         "ensure-dirs": [
-            "@php -r \"foreach (['cache','sessions'] as $suffix) { if (!is_dir('var/'.$suffix)) mkdir('var/'.$suffix, 0777, true); }\""
+            "@php -r \"@mkdir('var/cache', 0777, true); @mkdir('var/sessions', 0777, true);\""
+        ],
+        "lint": "@php tools/lint.php",
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-html=coverage --coverage-text",
+        "test-coverage-clover": "phpunit --coverage-clover=coverage.xml",
+        "phpstan": "phpstan analyse --memory-limit=512M",
+        "phpstan-baseline": "phpstan analyse --memory-limit=512M --generate-baseline",
+        "ci": [
+            "@lint",
+            "@phpstan",
+            "@test"
         ]
+    },
+    "scripts-descriptions": {
+        "lint": "Run `php -l` on every PHP source/test/script file",
+        "test": "Run the PHPUnit test suite",
+        "test-coverage": "Run PHPUnit with HTML + text coverage report (requires Xdebug or PCOV)",
+        "test-coverage-clover": "Run PHPUnit with a Clover coverage XML (for CI / Codecov)",
+        "phpstan": "Run PHPStan static analysis",
+        "phpstan-baseline": "Regenerate the PHPStan baseline file",
+        "ci": "Run lint + PHPStan + tests — what CI runs"
     },
     "minimum-stability": "stable"
 }

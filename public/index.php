@@ -155,12 +155,12 @@ try {
 }
 
 // Create PSR-7 request/response factories via discovery
-$requestFactory = Psr17FactoryDiscovery::findRequestFactory();
+$serverRequestFactory = Psr17FactoryDiscovery::findServerRequestFactory();
 $responseFactory = Psr17FactoryDiscovery::findResponseFactory();
 $streamFactory = Psr17FactoryDiscovery::findStreamFactory();
 
 $content = file_get_contents('php://input');
-$psrRequest = $requestFactory->createRequest($requestMethod, $requestUri)
+$psrRequest = $serverRequestFactory->createServerRequest($requestMethod, $requestUri, $_SERVER)
     ->withHeader('Accept', $_SERVER['HTTP_ACCEPT'] ?? 'application/json')
     ->withHeader('Content-Type', $_SERVER['CONTENT_TYPE'] ?? 'application/json');
 
@@ -186,24 +186,19 @@ foreach ($headersToForward as $headerName) {
 }
 
 // Create and run the transport
-$transport = new StreamableHttpTransport(
-    $psrRequest,
-    $responseFactory,
-    $streamFactory,
-    [
-        'Access-Control-Allow-Origin' => '*',
-        'Access-Control-Allow-Methods' => 'GET, POST, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers' => 'Accept, Authorization, Content-Type, Mcp-Session-Id, X-API-KEY, sessionid',
-        'Access-Control-Expose-Headers' => 'Mcp-Session-Id',
-    ],
-);
+$transport = new StreamableHttpTransport($psrRequest, $responseFactory, $streamFactory);
 
 try {
-    $server->run($transport, false);
+    $server->run($transport);
     $response = $transport->listen();
 
-    // Send the response
+    // Send the response. Add CORS headers here since the SDK transport doesn't
+    // expose a public hook for arbitrary response headers.
     http_response_code($response->getStatusCode());
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
+    header('Access-Control-Allow-Headers: Accept, Authorization, Content-Type, Mcp-Session-Id, X-API-KEY, sessionid');
+    header('Access-Control-Expose-Headers: Mcp-Session-Id');
     foreach ($response->getHeaders() as $name => $values) {
         foreach ($values as $value) {
             header("$name: $value", false);

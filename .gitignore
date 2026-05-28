@@ -1,0 +1,34 @@
+# Composer
+/vendor/
+composer.lock
+
+# Local env
+.env
+
+# Runtime / state
+/var/
+mcp-server-out.log
+mcp-server-err.log
+
+# Tooling caches
+/.phpunit.cache/
+/.phpunit.result.cache
+/.php-cs-fixer.cache
+/.phpstan.result.cache
+
+# Coverage output
+/coverage/
+coverage.xml
+coverage.clover
+clover.xml
+
+# Editor / OS junk
+/.idea/
+/.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Local-only tooling artifacts that aren't part of the project
+/.caliber/
+/.claude/

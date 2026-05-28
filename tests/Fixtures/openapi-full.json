@@ -1,0 +1,120 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Kitchen Sink", "version": "1.0.0" },
+  "paths": {
+    "/users": {
+      "parameters": [
+        { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } }
+      ],
+      "get": {
+        "operationId": "listUsers",
+        "summary": "List users",
+        "tags": ["users"],
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "X-Trace-Id", "in": "header", "schema": { "type": "string" } }
+        ]
+      },
+      "post": {
+        "operationId": "createUser",
+        "summary": "Create user",
+        "description": "Adds a new user account.",
+        "tags": ["users"],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/User" }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "operationId": "getUser",
+        "summary": "Get user",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteUser",
+        "summary": "Delete user",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/cancel": {
+      "post": {
+        "operationId": "adminCancelOrder",
+        "summary": "Cancel an order",
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    },
+    "/vps/{id}/reset_password": {
+      "post": {
+        "operationId": "resetVpsPassword",
+        "summary": "Reset VPS password",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    },
+    "/vps/{id}/details": {
+      "get": {
+        "operationId": "getVpsDetails",
+        "summary": "Get VPS details",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    },
+    "/multipart-upload": {
+      "post": {
+        "operationId": "multipartUpload",
+        "summary": "Upload file",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/no-op-id": {
+      "get": {}
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "name":  { "type": "string", "description": "Display name", "maxLength": 100 },
+          "tags":  { "type": "array", "items": { "type": "string" } },
+          "role":  { "type": "string", "enum": ["admin", "user"], "default": "user" },
+          "address": { "$ref": "#/components/schemas/Address" }
+        }
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "street": { "type": "string" },
+          "city":   { "type": "string" }
+        }
+      }
+    }
+  }
+}
