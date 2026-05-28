@@ -36,7 +36,8 @@
             "@ensure-dirs"
         ],
         "ensure-dirs": [
-            "mkdir -p var/cache var/sessions"
+            "@php -r \"foreach (['cache','sessions'] as $suffix) { if (!is_dir('var/'.$suffix)) mkdir('var/'.$suffix, 0777, true); }\""
         ]
-    }
+    },
+    "minimum-stability": "stable"
 }
