@@ -35,19 +35,23 @@ final class BinMcpCliTest extends TestCase
 
         $stdout = '';
         $stderr = '';
+        $exit = -1;
         $deadline = microtime(true) + ($timeoutMs / 1000);
         while (microtime(true) < $deadline) {
             $status = proc_get_status($proc);
             $stdout .= stream_get_contents($pipes[1]) ?: '';
             $stderr .= stream_get_contents($pipes[2]) ?: '';
             if (!$status['running']) {
+                // Capture exit code now — proc_close after proc_get_status has
+                // reaped the child returns -1 on some Linux/PHP combinations.
+                $exit = $status['exitcode'];
                 break;
             }
             usleep(20_000);
         }
         $stdout .= stream_get_contents($pipes[1]) ?: '';
         $stderr .= stream_get_contents($pipes[2]) ?: '';
-        $exit = proc_close($proc);
+        proc_close($proc);
 
         return ['stdout' => $stdout, 'stderr' => $stderr, 'exit' => $exit];
     }
