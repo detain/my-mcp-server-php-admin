@@ -53,10 +53,23 @@
         "test-coverage-clover": "phpunit --coverage-clover=coverage.xml",
         "phpstan": "phpstan analyse --memory-limit=512M",
         "phpstan-baseline": "phpstan analyse --memory-limit=512M --generate-baseline",
+        "bundle-validate": "npx --yes @anthropic-ai/mcpb validate mcpb/manifest.json",
+        "bundle-build": "mcpb/scripts/build-bundle.sh",
+        "bundle-clean": "rm -rf mcpb/build mcpb/dist",
+        "bundle": [
+            "@bundle-validate",
+            "@bundle-build"
+        ],
         "ci": [
             "@lint",
             "@phpstan",
             "@test"
+        ],
+        "ci-full": [
+            "@lint",
+            "@phpstan",
+            "@test",
+            "@bundle-validate"
         ]
     },
     "scripts-descriptions": {
@@ -66,7 +79,12 @@
         "test-coverage-clover": "Run PHPUnit with a Clover coverage XML (for CI / Codecov)",
         "phpstan": "Run PHPStan static analysis",
         "phpstan-baseline": "Regenerate the PHPStan baseline file",
-        "ci": "Run lint + PHPStan + tests — what CI runs"
+        "bundle-validate": "Validate mcpb/manifest.json against the MCPB schema (needs npx)",
+        "bundle-build": "Build the .mcpb bundle into mcpb/dist/ (runs validate as part of pack)",
+        "bundle-clean": "Remove mcpb/build/ and mcpb/dist/",
+        "bundle": "Validate the manifest, then build the .mcpb bundle",
+        "ci": "Run lint + PHPStan + tests — what CI runs",
+        "ci-full": "Run lint + PHPStan + tests + bundle-validate — full pre-release check"
     },
     "minimum-stability": "stable"
 }
